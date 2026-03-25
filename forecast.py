@@ -75,7 +75,10 @@ def forecast_recursive(
     holiday_frame: HolidayFrame,
     feature_cols: List[str],
     quantile_models: Dict[float, object],
+    long_feature_cols: List[str],
+    long_quantile_models: Dict[float, object],
     qty_model: object,
+    long_qty_model: object,
     forecast_start: date,
     forecast_end: date,
 ) -> ForecastResult:
@@ -90,6 +93,21 @@ def forecast_recursive(
 
         sales_history = group.set_index(config.date_col)[config.target_col].astype(float)
         qty_history = group.set_index(config.date_col)[config.qty_col].astype(float)
+
+        sales_monthly_median = (
+            group.assign(month=group[config.date_col].dt.month)
+            .groupby("month")[config.target_col]
+            .median()
+            .to_dict()
+        )
+        qty_monthly_median = (
+            group.assign(month=group[config.date_col].dt.month)
+            .groupby("month")[config.qty_col]
+            .median()
+            .to_dict()
+        )
+        sales_overall_median = float(sales_history.median())
+        qty_overall_median = float(qty_history.median())
 
         min_hist = sales_history.min()
         max_hist = sales_history.max()
@@ -123,14 +141,35 @@ def forecast_recursive(
                 row[key] = value
 
             row[config.store_col] = row[config.store_col].astype("category")
-            X_row = row[feature_cols]
+            if use_recursive:
+                X_row = row[feature_cols]
+                preds = {
+                    alpha: model.predict(X_row)[0] for alpha, model in quantile_models.items()
+                }
+                qty_pred = qty_model.predict(X_row)[0]
+            else:
+                X_row = row[long_feature_cols]
+                preds = {
+                    alpha: model.predict(X_row)[0]
+                    for alpha, model in long_quantile_models.items()
+                }
+                qty_pred = long_qty_model.predict(X_row)[0]
 
-            preds = {alpha: model.predict(X_row)[0] for alpha, model in quantile_models.items()}
-            qty_pred = qty_model.predict(X_row)[0]
+                month_key = d.month
+                sales_baseline = float(sales_monthly_median.get(month_key, sales_overall_median))
+                qty_baseline = float(qty_monthly_median.get(month_key, qty_overall_median))
+                blend_w = config.long_horizon_blend_weight
+                preds = {k: blend_w * v + (1.0 - blend_w) * sales_baseline for k, v in preds.items()}
+                qty_pred = blend_w * qty_pred + (1.0 - blend_w) * qty_baseline
 
             median = preds.get(0.5, np.median(list(preds.values())))
+            month_floor = float(sales_monthly_median.get(d.month, sales_overall_median))
             clipped_median = float(np.clip(median, lower_bound, upper_bound))
+            clipped_median = max(clipped_median, month_floor)
             preds = {k: float(np.clip(v, lower_bound, upper_bound)) for k, v in preds.items()}
+            preds = {k: max(v, month_floor) for k, v in preds.items()}
+            qty_floor = float(qty_monthly_median.get(d.month, qty_overall_median))
+            qty_pred = max(float(qty_pred), qty_floor)
 
             forecasts.append(
                 {

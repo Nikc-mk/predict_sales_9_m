@@ -24,7 +24,7 @@ class ForecastConfig:
     lags: List[int] = (1, 3, 7, 14, 28)
     rolling_windows: List[int] = (7, 14, 28)
 
-    recursive_horizon_days: int = 42
+    recursive_horizon_days: int = 120
     clip_lower_mult: float = 0.5
     clip_upper_mult: float = 2.5
 
@@ -34,3 +34,5 @@ class ForecastConfig:
     quantile_alphas: List[float] = (0.1, 0.5, 0.9)
 
     random_state: int = 42
+
+    long_horizon_blend_weight: float = 0.7

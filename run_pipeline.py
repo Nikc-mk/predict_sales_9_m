@@ -103,8 +103,10 @@ def main() -> None:
     )
 
     feature_cols = select_feature_columns(features_df, [config.target_col, config.qty_col])
+    long_feature_cols = [c for c in feature_cols if not c.startswith("lag_") and not c.startswith("roll_")]
 
     train_df = features_df.dropna(subset=feature_cols + [config.target_col, config.qty_col])
+    long_train_df = features_df.dropna(subset=long_feature_cols + [config.target_col, config.qty_col])
     X = train_df[feature_cols]
     y_sales = train_df[config.target_col]
     y_qty = train_df[config.qty_col]
@@ -115,6 +117,20 @@ def main() -> None:
         X, y_sales, categorical_features, list(config.quantile_alphas), config.random_state
     )
     qty_model = train_qty_model(X, y_qty, categorical_features, config.random_state)
+
+    long_quantile_models = train_quantile_models(
+        long_train_df[long_feature_cols],
+        long_train_df[config.target_col],
+        categorical_features,
+        list(config.quantile_alphas),
+        config.random_state,
+    )
+    long_qty_model = train_qty_model(
+        long_train_df[long_feature_cols],
+        long_train_df[config.qty_col],
+        categorical_features,
+        config.random_state,
+    )
 
     try:
         import shap
@@ -186,9 +202,12 @@ def main() -> None:
 
     feature_config = {
         "features": feature_cols,
+        "long_horizon_features": long_feature_cols,
         "categorical_features": categorical_features,
         "target": config.target_col,
         "secondary_target": config.qty_col,
+        "recursive_horizon_days": config.recursive_horizon_days,
+        "long_horizon_blend_weight": config.long_horizon_blend_weight,
     }
     (output_dir / "feature_config.json").write_text(
         json.dumps(feature_config, indent=2), encoding="utf-8"
@@ -212,8 +231,11 @@ def main() -> None:
         config=config,
         holiday_frame=holiday_frame,
         feature_cols=feature_cols,
+        long_feature_cols=long_feature_cols,
         quantile_models=quantile_models,
+        long_quantile_models=long_quantile_models,
         qty_model=qty_model,
+        long_qty_model=long_qty_model,
         forecast_start=config.forecast_start_date,
         forecast_end=config.forecast_end_date,
     )
@@ -228,6 +250,16 @@ def main() -> None:
     forecast_df = pd.concat([forecast_df, total_df], ignore_index=True)
 
     forecast_df.to_csv(output_dir / "forecast_2026.csv", index=False)
+
+    monthly_df = forecast_df[forecast_df[config.store_col] != "TOTAL"].copy()
+    monthly_df["month"] = pd.to_datetime(monthly_df["posting_date"]).dt.to_period("M").dt.to_timestamp()
+    monthly_agg = (
+        monthly_df.groupby("month")[["sales_amount_pred", "sales_amount_pred_lower", "sales_amount_pred_upper", "sales_qty_pred"]]
+        .sum()
+        .reset_index()
+        .rename(columns={"month": "posting_month"})
+    )
+    monthly_agg.to_csv(output_dir / "forecast_2026_monthly.csv", index=False)
 
 
 if __name__ == "__main__":
