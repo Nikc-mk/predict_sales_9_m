@@ -178,7 +178,7 @@ def forecast_recursive(
                     "sales_amount_pred": clipped_median,
                     "sales_amount_pred_lower": preds[min(preds.keys())],
                     "sales_amount_pred_upper": preds[max(preds.keys())],
-                    "sales_qty_pred": float(max(0.0, qty_pred)),
+                    "sales_qty_pred": float(qty_pred),
                 }
             )
 
@@ -187,7 +187,7 @@ def forecast_recursive(
                     [recursive_series, pd.Series([clipped_median], index=[d])]
                 )
                 recursive_qty = pd.concat(
-                    [recursive_qty, pd.Series([max(0.0, qty_pred)], index=[d])]
+                    [recursive_qty, pd.Series([qty_pred], index=[d])]
                 )
 
     forecast_df = pd.DataFrame(forecasts)

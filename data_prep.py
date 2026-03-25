@@ -67,7 +67,7 @@ def cap_spikes(
         mean = values.mean()
         std = values.std(ddof=0)
         upper = mean + sigma * std
-        lower = max(0.0, mean - sigma * std)
+        lower = mean - sigma * std
         thresholds[str(store)] = (lower, upper)
 
         original = df.loc[group_idx, target_col].astype(float)
@@ -86,7 +86,5 @@ def cap_spikes(
 
 
 def validate_input(df: pd.DataFrame, date_col: str, target_col: str, store_col: str) -> None:
-    if df[target_col].lt(0).any():
-        raise ValueError("Negative sales detected. Please resolve before training.")
     if df.duplicated([date_col, store_col]).any():
         raise ValueError("Duplicate store-date rows detected.")
