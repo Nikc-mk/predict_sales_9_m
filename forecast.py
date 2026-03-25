@@ -52,6 +52,7 @@ def _build_feature_row(
     date_value: pd.Timestamp,
     holiday_frame: HolidayFrame,
     open_date: pd.Timestamp,
+    origin_date: date,
 ) -> pd.DataFrame:
     df = pd.DataFrame(
         [
@@ -63,7 +64,7 @@ def _build_feature_row(
             }
         ]
     )
-    df = add_time_features(df, "posting_date")
+    df = add_time_features(df, "posting_date", origin_date=origin_date)
     df = add_holiday_features(df, "posting_date", holiday_frame)
     df = add_store_age_features(df, "posting_date", "open_date")
     return df
@@ -81,6 +82,7 @@ def forecast_recursive(
     long_qty_model: object,
     forecast_start: date,
     forecast_end: date,
+    origin_date: date,
 ) -> ForecastResult:
     history_df = history_df.sort_values([config.store_col, config.date_col])
     clip_bounds: Dict[str, Tuple[float, float]] = {}
@@ -134,7 +136,13 @@ def forecast_recursive(
                 lag_vals = static_sales
                 qty_vals = static_qty
 
-            row = _build_feature_row(base_row, d, holiday_frame, group["open_date"].iloc[0])
+            row = _build_feature_row(
+                base_row,
+                d,
+                holiday_frame,
+                group["open_date"].iloc[0],
+                origin_date,
+            )
             for key, value in lag_vals.items():
                 row[key] = value
             for key, value in qty_vals.items():

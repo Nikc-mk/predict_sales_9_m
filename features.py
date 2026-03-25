@@ -50,9 +50,15 @@ def load_holidays(
     return HolidayFrame(holidays=df, source="holidays-lib")
 
 
-def add_time_features(df: pd.DataFrame, date_col: str) -> pd.DataFrame:
+def add_time_features(
+    df: pd.DataFrame,
+    date_col: str,
+    origin_date: date | None = None,
+) -> pd.DataFrame:
     df = df.copy()
     dt = df[date_col]
+    if origin_date is None:
+        origin_date = dt.min().date()
     df["dayofweek"] = dt.dt.dayofweek
     df["is_weekend"] = dt.dt.dayofweek.isin([5, 6]).astype(int)
     df["month"] = dt.dt.month
@@ -60,6 +66,8 @@ def add_time_features(df: pd.DataFrame, date_col: str) -> pd.DataFrame:
     df["weekofyear"] = dt.dt.isocalendar().week.astype(int)
     df["dayofyear"] = dt.dt.dayofyear
     df["dayofmonth"] = dt.dt.day
+    df["year"] = dt.dt.year
+    df["time_index_days"] = (dt - pd.Timestamp(origin_date)).dt.days
     df["is_month_start"] = dt.dt.is_month_start.astype(int)
     df["is_month_end"] = dt.dt.is_month_end.astype(int)
     df["is_quarter_start"] = dt.dt.is_quarter_start.astype(int)
@@ -135,8 +143,9 @@ def build_feature_frame(
     lags: List[int],
     rolling_windows: List[int],
     holiday_frame: HolidayFrame,
+    origin_date: date | None = None,
 ) -> pd.DataFrame:
-    df = add_time_features(df, date_col)
+    df = add_time_features(df, date_col, origin_date=origin_date)
     df = add_holiday_features(df, date_col, holiday_frame)
     df = add_store_age_features(df, date_col, open_date_col)
     df = add_lag_features(df, store_col, target_cols, lags)

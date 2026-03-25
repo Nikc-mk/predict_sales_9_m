@@ -96,6 +96,7 @@ def main() -> None:
     panel_df[config.store_col] = panel_df[config.store_col].astype("category")
     panel_hist_df[config.store_col] = panel_hist_df[config.store_col].astype("category")
 
+    origin_date = panel_hist_df[config.date_col].min().date()
     features_df = build_feature_frame(
         panel_hist_df,
         config.date_col,
@@ -105,6 +106,7 @@ def main() -> None:
         list(config.lags),
         list(config.rolling_windows),
         holiday_frame,
+        origin_date=origin_date,
     )
 
     feature_cols = select_feature_columns(features_df, [config.target_col, config.qty_col])
@@ -175,6 +177,7 @@ def main() -> None:
         long_qty_model=long_qty_model,
         forecast_start=holdout_start,
         forecast_end=holdout_end,
+        origin_date=origin_date,
     ).forecast
 
     actual_holdout = panel_hist_df[
@@ -247,6 +250,7 @@ def main() -> None:
             list(config.lags),
             list(config.rolling_windows),
             holiday_frame,
+            origin_date=origin_date,
         )
         split_feature_cols = select_feature_columns(split_features, [config.target_col, config.qty_col])
         split_long_cols = [
@@ -297,6 +301,7 @@ def main() -> None:
             long_qty_model=split_long_qty_model,
             forecast_start=split_test_start,
             forecast_end=split_test_end,
+            origin_date=origin_date,
         ).forecast
 
         split_actual = panel_hist_df[
@@ -368,6 +373,7 @@ def main() -> None:
         long_qty_model=long_qty_model,
         forecast_start=config.forecast_start_date,
         forecast_end=config.forecast_end_date,
+        origin_date=origin_date,
     )
 
     forecast_df = forecast_result.forecast.copy()
