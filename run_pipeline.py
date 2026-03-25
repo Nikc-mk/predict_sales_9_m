@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from config import ForecastConfig
+from calibration import apply_interval_calibration, fit_interval_calibration
 from data_prep import cap_spikes, prepare_panel_data, validate_input
 from features import build_feature_frame, load_holidays, select_feature_columns
 from forecast import forecast_recursive
@@ -74,6 +75,9 @@ def main() -> None:
         config.forecast_end_date,
     )
 
+    history_end_date = df[config.date_col].max()
+    panel_hist_df = panel_df[panel_df[config.date_col] <= history_end_date].copy()
+
     if config.enable_capping:
         panel_df, _ = cap_spikes(
             panel_df,
@@ -90,9 +94,10 @@ def main() -> None:
     holiday_frame = load_holidays(start_date, config.forecast_end_date)
 
     panel_df[config.store_col] = panel_df[config.store_col].astype("category")
+    panel_hist_df[config.store_col] = panel_hist_df[config.store_col].astype("category")
 
     features_df = build_feature_frame(
-        panel_df,
+        panel_hist_df,
         config.date_col,
         config.store_col,
         config.open_date_col,
@@ -154,16 +159,58 @@ def main() -> None:
         logger.info("SHAP computation skipped due to missing dependency or runtime error.")
 
     holdout_split = make_holdout_split(train_df, config.date_col, config.holdout_days)
-    holdout_df = train_df.loc[holdout_split.test_idx].copy()
+    holdout_start = train_df.loc[holdout_split.test_idx, config.date_col].min().date()
+    holdout_end = train_df.loc[holdout_split.test_idx, config.date_col].max().date()
 
-    quantile_preds = predict_quantiles(quantile_models, holdout_df[feature_cols])
-    holdout_df["sales_amount_pred_lower"] = quantile_preds[min(config.quantile_alphas)].values
-    holdout_df["sales_amount_pred"] = quantile_preds[0.5].values
-    holdout_df["sales_amount_pred_upper"] = quantile_preds[max(config.quantile_alphas)].values
+    history_until_holdout = panel_hist_df[panel_hist_df[config.date_col] < pd.Timestamp(holdout_start)]
+    holdout_forecast = forecast_recursive(
+        history_df=history_until_holdout,
+        config=config,
+        holiday_frame=holiday_frame,
+        feature_cols=feature_cols,
+        long_feature_cols=long_feature_cols,
+        quantile_models=quantile_models,
+        long_quantile_models=long_quantile_models,
+        qty_model=qty_model,
+        long_qty_model=long_qty_model,
+        forecast_start=holdout_start,
+        forecast_end=holdout_end,
+    ).forecast
+
+    actual_holdout = panel_hist_df[
+        (panel_hist_df[config.date_col] >= pd.Timestamp(holdout_start))
+        & (panel_hist_df[config.date_col] <= pd.Timestamp(holdout_end))
+    ]
+    holdout_df = actual_holdout.merge(
+        holdout_forecast,
+        on=[config.date_col, config.store_col],
+        how="left",
+    )
+
+    calibration = fit_interval_calibration(
+        holdout_df,
+        config.store_col,
+        config.target_col,
+        "sales_amount_pred",
+        "sales_amount_pred_lower",
+        "sales_amount_pred_upper",
+        config.interval_target_coverage,
+        config.interval_calibration_min_samples,
+    )
+    holdout_df = apply_interval_calibration(
+        holdout_df,
+        config.store_col,
+        "sales_amount_pred",
+        "sales_amount_pred_lower",
+        "sales_amount_pred_upper",
+        calibration,
+    )
 
     notes = {
         "holiday_source": holiday_frame.source,
         "capping_enabled": str(config.enable_capping),
+        "interval_target_coverage": str(config.interval_target_coverage),
+        "interval_global_scale": f"{calibration.global_scale:.3f}",
     }
 
     build_report(
@@ -179,20 +226,100 @@ def main() -> None:
 
     backtest_rows = []
     backtest_splits = make_backtest_splits(
-        train_df, config.date_col, config.backtest_iters, config.backtest_test_days, config.backtest_gap_days
+        train_df,
+        config.date_col,
+        config.backtest_iters,
+        config.backtest_test_days,
+        config.backtest_gap_days,
     )
     for i, split in enumerate(backtest_splits, start=1):
-        split_df = train_df.loc[split.test_idx].copy()
-        split_preds = predict_quantiles(quantile_models, split_df[feature_cols])
-        split_df["pred"] = split_preds[0.5].values
+        split_train_end = train_df.loc[split.train_idx, config.date_col].max()
+        split_test_start = train_df.loc[split.test_idx, config.date_col].min().date()
+        split_test_end = train_df.loc[split.test_idx, config.date_col].max().date()
+
+        split_panel = panel_hist_df[panel_hist_df[config.date_col] <= split_train_end]
+        split_features = build_feature_frame(
+            split_panel,
+            config.date_col,
+            config.store_col,
+            config.open_date_col,
+            [config.target_col, config.qty_col],
+            list(config.lags),
+            list(config.rolling_windows),
+            holiday_frame,
+        )
+        split_feature_cols = select_feature_columns(split_features, [config.target_col, config.qty_col])
+        split_long_cols = [
+            c for c in split_feature_cols if not c.startswith("lag_") and not c.startswith("roll_")
+        ]
+        split_train_df = split_features.dropna(
+            subset=split_feature_cols + [config.target_col, config.qty_col]
+        )
+        split_long_train_df = split_features.dropna(
+            subset=split_long_cols + [config.target_col, config.qty_col]
+        )
+        split_quantile_models = train_quantile_models(
+            split_train_df[split_feature_cols],
+            split_train_df[config.target_col],
+            categorical_features,
+            list(config.quantile_alphas),
+            config.random_state,
+        )
+        split_long_models = train_quantile_models(
+            split_long_train_df[split_long_cols],
+            split_long_train_df[config.target_col],
+            categorical_features,
+            list(config.quantile_alphas),
+            config.random_state,
+        )
+        split_qty_model = train_qty_model(
+            split_train_df[split_feature_cols],
+            split_train_df[config.qty_col],
+            categorical_features,
+            config.random_state,
+        )
+        split_long_qty_model = train_qty_model(
+            split_long_train_df[split_long_cols],
+            split_long_train_df[config.qty_col],
+            categorical_features,
+            config.random_state,
+        )
+
+        split_forecast = forecast_recursive(
+            history_df=split_panel,
+            config=config,
+            holiday_frame=holiday_frame,
+            feature_cols=split_feature_cols,
+            long_feature_cols=split_long_cols,
+            quantile_models=split_quantile_models,
+            long_quantile_models=split_long_models,
+            qty_model=split_qty_model,
+            long_qty_model=split_long_qty_model,
+            forecast_start=split_test_start,
+            forecast_end=split_test_end,
+        ).forecast
+
+        split_actual = panel_hist_df[
+            (panel_hist_df[config.date_col] >= pd.Timestamp(split_test_start))
+            & (panel_hist_df[config.date_col] <= pd.Timestamp(split_test_end))
+        ]
+        split_merged = split_actual.merge(
+            split_forecast,
+            on=[config.date_col, config.store_col],
+            how="left",
+        )
         backtest_rows.append(
             {
                 "split": i,
-                "start_date": split_df[config.date_col].min().date(),
-                "end_date": split_df[config.date_col].max().date(),
+                "start_date": split_test_start,
+                "end_date": split_test_end,
                 "wmape": float(
-                    np.sum(np.abs(split_df[config.target_col] - split_df["pred"]))
-                    / np.sum(np.abs(split_df[config.target_col]))
+                    np.sum(
+                        np.abs(
+                            split_merged[config.target_col] - split_merged["sales_amount_pred"]
+                        )
+                    )
+                    / np.sum(np.abs(split_merged[config.target_col]))
                     * 100
                 ),
             }
@@ -208,6 +335,9 @@ def main() -> None:
         "secondary_target": config.qty_col,
         "recursive_horizon_days": config.recursive_horizon_days,
         "long_horizon_blend_weight": config.long_horizon_blend_weight,
+        "interval_target_coverage": config.interval_target_coverage,
+        "interval_global_scale": calibration.global_scale,
+        "interval_calibration_min_samples": config.interval_calibration_min_samples,
     }
     (output_dir / "feature_config.json").write_text(
         json.dumps(feature_config, indent=2), encoding="utf-8"
@@ -241,6 +371,14 @@ def main() -> None:
     )
 
     forecast_df = forecast_result.forecast.copy()
+    forecast_df = apply_interval_calibration(
+        forecast_df,
+        config.store_col,
+        "sales_amount_pred",
+        "sales_amount_pred_lower",
+        "sales_amount_pred_upper",
+        calibration,
+    )
     total_df = (
         forecast_df.groupby("posting_date")[["sales_amount_pred", "sales_amount_pred_lower", "sales_amount_pred_upper", "sales_qty_pred"]]
         .sum()

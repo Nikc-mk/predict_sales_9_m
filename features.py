@@ -60,6 +60,14 @@ def add_time_features(df: pd.DataFrame, date_col: str) -> pd.DataFrame:
     df["weekofyear"] = dt.dt.isocalendar().week.astype(int)
     df["dayofyear"] = dt.dt.dayofyear
     df["dayofmonth"] = dt.dt.day
+    df["is_month_start"] = dt.dt.is_month_start.astype(int)
+    df["is_month_end"] = dt.dt.is_month_end.astype(int)
+    df["is_quarter_start"] = dt.dt.is_quarter_start.astype(int)
+    df["is_quarter_end"] = dt.dt.is_quarter_end.astype(int)
+    df["dow_sin"] = np.sin(2 * np.pi * df["dayofweek"] / 7)
+    df["dow_cos"] = np.cos(2 * np.pi * df["dayofweek"] / 7)
+    df["month_sin"] = np.sin(2 * np.pi * df["month"] / 12)
+    df["month_cos"] = np.cos(2 * np.pi * df["month"] / 12)
     return df
 
 

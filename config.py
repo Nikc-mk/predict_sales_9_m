@@ -21,8 +21,8 @@ class ForecastConfig:
     backtest_gap_days: int = 2
     backtest_test_days: int = 30
 
-    lags: List[int] = (1, 3, 7, 14, 28)
-    rolling_windows: List[int] = (7, 14, 28)
+    lags: List[int] = (1, 3, 7, 14, 28, 56)
+    rolling_windows: List[int] = (7, 14, 28, 56)
 
     recursive_horizon_days: int = 120
     clip_lower_mult: float = 0.5
@@ -36,3 +36,5 @@ class ForecastConfig:
     random_state: int = 42
 
     long_horizon_blend_weight: float = 0.7
+    interval_target_coverage: float = 0.8
+    interval_calibration_min_samples: int = 20
