@@ -1,0 +1,50 @@
+name = "sales-forecast-2026"
+description = "Daily sales forecasting per store and total network through 2026-12-31."
+spec_version = "1.0"
+owner = "data-science"
+
+[inputs]
+primary_table = "data/data.csv"
+columns = ["posting_date", "shop_account_name", "sales_amount", "sales_qty"]
+date_range_start = "2024-01-01"
+date_range_forecast_start = "2026-03-25"
+date_range_forecast_end = "2026-12-31"
+
+[outputs]
+forecast_csv = "artifacts/forecast_2026.csv"
+report_md = "artifacts/report.md"
+models_dir = "artifacts/models"
+feature_config = "artifacts/feature_config.json"
+
+[pipeline]
+entrypoint = "run_pipeline.py"
+command = "python run_pipeline.py --input data/data.csv --output-dir artifacts"
+
+[modeling]
+primary_model = "LightGBM global quantile regression"
+quantiles = [0.1, 0.5, 0.9]
+secondary_target = "sales_qty (regression)"
+uncertainty = "P10-P90 prediction interval"
+
+[features]
+time = ["dayofweek", "is_weekend", "month", "quarter", "weekofyear", "dayofyear", "dayofmonth"]
+holidays = ["is_holiday", "is_pre_holiday", "is_post_holiday"]
+store_age = ["store_age_days", "store_age_weeks", "store_age_months"]
+lags = ["1", "3", "7", "14", "28"]
+rolling = ["7", "14", "28"]
+categorical = ["shop_account_name"]
+
+[validation]
+holdout_days = 45
+backtest_iters = 3
+backtest_gap_days = 2
+backtest_test_days = 30
+target_metric = "WMAPE <= 10% (total and most stores)"
+
+[forecasting]
+recursive_horizon_days = 42
+clip_lower_mult = 0.5
+clip_upper_mult = 2.5
+
+[notes]
+holiday_source = "Use data/ru_holidays_2024_2026.csv if provided; otherwise python-holidays RU."
