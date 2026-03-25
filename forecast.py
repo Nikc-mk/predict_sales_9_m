@@ -96,20 +96,20 @@ def forecast_recursive(
         sales_history = group.set_index(config.date_col)[config.target_col].astype(float)
         qty_history = group.set_index(config.date_col)[config.qty_col].astype(float)
 
-        sales_monthly_median = (
-            group.assign(month=group[config.date_col].dt.month)
-            .groupby("month")[config.target_col]
-            .median()
-            .to_dict()
+        group = group.copy()
+        group["year"] = group[config.date_col].dt.year
+        group["month"] = group[config.date_col].dt.month
+        sales_monthly_year = (
+            group.groupby(["year", "month"])[config.target_col].median().to_dict()
         )
-        qty_monthly_median = (
-            group.assign(month=group[config.date_col].dt.month)
-            .groupby("month")[config.qty_col]
-            .median()
-            .to_dict()
+        qty_monthly_year = (
+            group.groupby(["year", "month"])[config.qty_col].median().to_dict()
         )
+        sales_monthly_median = group.groupby("month")[config.target_col].median().to_dict()
+        qty_monthly_median = group.groupby("month")[config.qty_col].median().to_dict()
         sales_overall_median = float(sales_history.median())
         qty_overall_median = float(qty_history.median())
+        max_hist_year = int(group["year"].max())
 
         min_hist = sales_history.min()
         max_hist = sales_history.max()
@@ -164,19 +164,46 @@ def forecast_recursive(
                 qty_pred = long_qty_model.predict(X_row)[0]
 
                 month_key = d.month
-                sales_baseline = float(sales_monthly_median.get(month_key, sales_overall_median))
-                qty_baseline = float(qty_monthly_median.get(month_key, qty_overall_median))
+                candidate_years = sorted({y for (y, m) in sales_monthly_year if m == month_key})
+                candidate_years = [y for y in candidate_years if y <= d.year - 1] or candidate_years
+                baseline_year = candidate_years[-1] if candidate_years else max_hist_year
+                prev_year = baseline_year - 1
+
+                sales_base = sales_monthly_year.get(
+                    (baseline_year, month_key),
+                    sales_monthly_median.get(month_key, sales_overall_median),
+                )
+                sales_prev = sales_monthly_year.get(
+                    (prev_year, month_key),
+                    sales_monthly_median.get(month_key, sales_overall_median),
+                )
+                qty_base = qty_monthly_year.get(
+                    (baseline_year, month_key),
+                    qty_monthly_median.get(month_key, qty_overall_median),
+                )
+                qty_prev = qty_monthly_year.get(
+                    (prev_year, month_key),
+                    qty_monthly_median.get(month_key, qty_overall_median),
+                )
+
+                sales_growth = sales_base / sales_prev if sales_prev not in (0, None) else 1.0
+                qty_growth = qty_base / qty_prev if qty_prev not in (0, None) else 1.0
+                sales_growth = float(np.clip(sales_growth, 0.5, 2.0))
+                qty_growth = float(np.clip(qty_growth, 0.5, 2.0))
+
+                sales_baseline = float(sales_base * sales_growth)
+                qty_baseline = float(qty_base * qty_growth)
                 blend_w = config.long_horizon_blend_weight
                 preds = {k: blend_w * v + (1.0 - blend_w) * sales_baseline for k, v in preds.items()}
                 qty_pred = blend_w * qty_pred + (1.0 - blend_w) * qty_baseline
 
             median = preds.get(0.5, np.median(list(preds.values())))
-            month_floor = float(sales_monthly_median.get(d.month, sales_overall_median))
+            month_floor = float(sales_baseline if not use_recursive else sales_monthly_median.get(d.month, sales_overall_median))
             clipped_median = float(np.clip(median, lower_bound, upper_bound))
             clipped_median = max(clipped_median, month_floor)
             preds = {k: float(np.clip(v, lower_bound, upper_bound)) for k, v in preds.items()}
             preds = {k: max(v, month_floor) for k, v in preds.items()}
-            qty_floor = float(qty_monthly_median.get(d.month, qty_overall_median))
+            qty_floor = float(qty_baseline if not use_recursive else qty_monthly_median.get(d.month, qty_overall_median))
             qty_pred = max(float(qty_pred), qty_floor)
 
             forecasts.append(

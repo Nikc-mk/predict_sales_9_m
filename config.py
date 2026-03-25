@@ -35,6 +35,6 @@ class ForecastConfig:
 
     random_state: int = 42
 
-    long_horizon_blend_weight: float = 0.7
+    long_horizon_blend_weight: float = 0.9
     interval_target_coverage: float = 0.8
     interval_calibration_min_samples: int = 20
